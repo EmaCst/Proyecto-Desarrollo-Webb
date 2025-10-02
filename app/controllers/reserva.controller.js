@@ -1,4 +1,3 @@
-// controllers/reserva.controller.js
 const db = require("../models");
 const Reserva = db.reservas;
 
@@ -7,26 +6,40 @@ exports.create = async (req, res) => {
   try {
     const { usuarioId, funcionId, asientoId } = req.body;
 
-    // Validar campos obligatorios
     if (!usuarioId || !funcionId || !asientoId) {
       return res.status(400).json({ message: "Faltan campos obligatorios." });
     }
 
-    // Verificar que el asiento, usuario y función existan
-    const usuarioExistente = await db.usuarios.findByPk(usuarioId);
-    if (!usuarioExistente) return res.status(404).json({ message: "Usuario no encontrado." });
+    // Validar existencia de entidades
+    const [usuario, funcion, asiento] = await Promise.all([
+      db.usuarios.findByPk(usuarioId),
+      db.funciones.findByPk(funcionId),
+      db.asientos.findByPk(asientoId)
+    ]);
 
-    const funcionExistente = await db.funciones.findByPk(funcionId);
-    if (!funcionExistente) return res.status(404).json({ message: "Función no encontrada." });
+    if (!usuario) return res.status(404).json({ message: "Usuario no encontrado." });
+    if (!funcion) return res.status(404).json({ message: "Función no encontrada." });
+    if (!asiento) return res.status(404).json({ message: "Asiento no encontrado." });
 
-    const asientoExistente = await db.asientos.findByPk(asientoId);
-    if (!asientoExistente) return res.status(404).json({ message: "Asiento no encontrado." });
+    // Verificar que el asiento no esté reservado para esa función
+    const yaReservado = await db.reservas.findOne({
+      where: {
+        funcionId,
+        asientoId
+      }
+    });
 
-    // Crear la reserva
+    if (yaReservado) {
+      return res.status(409).json({ message: "Ese asiento ya está reservado para esta función." });
+    }
+
+    // Crear reserva (estado: pendiente, sin pagoId aún)
     const nuevaReserva = await Reserva.create({
       usuarioId,
       funcionId,
-      asientoId
+      asientoId,
+      estado: "pendiente",
+      pagoId: null
     });
 
     res.status(201).json(nuevaReserva);
@@ -34,7 +47,6 @@ exports.create = async (req, res) => {
     res.status(500).json({ message: err.message });
   }
 };
-
 
 // Obtener todas las reservas
 exports.findAll = async (req, res) => {
@@ -71,32 +83,40 @@ exports.findOne = async (req, res) => {
   }
 };
 
-// Actualizar una reserva
+// Actualizar una reserva (solo si está pendiente)
 exports.update = async (req, res) => {
   try {
     const { id } = req.params;
     const { usuarioId, funcionId, asientoId } = req.body;
 
-    // Validar campos obligatorios
-    if (!usuarioId || !funcionId || !asientoId) {
-      return res.status(400).json({ message: "Faltan campos obligatorios." });
+    const reserva = await Reserva.findByPk(id);
+    if (!reserva) {
+      return res.status(404).json({ message: "Reserva no encontrada." });
     }
 
-    const [updated] = await db.reservas.update(
-      { usuarioId, funcionId, asientoId },
-      { where: { id } }
-    );
+    if (reserva.estado === "confirmado") {
+      return res.status(400).json({ message: "No se puede modificar una reserva confirmada." });
+    }
 
-    if (updated === 0)
-      return res.status(404).json({ message: "Reserva no encontrada." });
+    // Validar que el asiento no esté ya reservado para esa función
+    const yaReservado = await db.reservas.findOne({
+      where: {
+        funcionId,
+        asientoId,
+        id: { [db.Sequelize.Op.ne]: id } // Excluir la misma reserva
+      }
+    });
 
-    const reservaActualizada = await db.reservas.findByPk(id);
-    res.json(reservaActualizada);
+    if (yaReservado) {
+      return res.status(409).json({ message: "Ese asiento ya está reservado para esta función." });
+    }
+
+    await reserva.update({ usuarioId, funcionId, asientoId });
+    res.json(reserva);
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 };
-
 
 // Eliminar una reserva
 exports.delete = async (req, res) => {
@@ -120,4 +140,3 @@ exports.deleteAll = async (req, res) => {
     res.status(500).json({ message: err.message });
   }
 };
-
